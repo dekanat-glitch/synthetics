@@ -1131,6 +1131,10 @@ st.info(
     "DEMO ENVIRONMENT · Synthetic data · August 2026 · "
     "Partner 1, Partner 2, Partner 3"
 )
+st.caption(
+    "Content → Distribution → Impact · confirmed evidence is kept separate "
+    "from AI/inference-based relations."
+)
 
 with st.sidebar:
 
@@ -1314,6 +1318,8 @@ tabs = st.tabs(
         "Story Journeys",
         "Social Distribution",
         "Performance",
+        "Network Patterns",
+        "Partner Value",
     ]
 )
 
@@ -1369,21 +1375,27 @@ with tabs[0]:
         )
 
     possible_pickups = 0
+    follow_ups = 0
+    cross_partner_relations = 0
 
     if (
         not article_relations.empty
         and "relation_type" in article_relations.columns
     ):
-        rel = article_relations[
-            article_relations["relation_type"] == "possible_pickup"
-        ]
+        rel_scope = article_relations.copy()
 
-        if "source_article_id" in rel.columns:
-            rel = rel[
-                rel["source_article_id"].isin(filtered_article_ids)
+        if "source_article_id" in rel_scope.columns:
+            rel_scope = rel_scope[
+                rel_scope["source_article_id"].isin(filtered_article_ids)
             ]
 
-        possible_pickups = len(rel)
+        possible_pickups = int(
+            rel_scope["relation_type"].eq("possible_pickup").sum()
+        )
+        follow_ups = int(
+            rel_scope["relation_type"].eq("follow_up").sum()
+        )
+        cross_partner_relations = len(rel_scope)
 
     telegram_links_count = 0
 
@@ -1483,242 +1495,317 @@ with tabs[0]:
         metric_number(possible_pickups)
     )
 
+    r1, r2, r3 = st.columns(3)
+    r1.metric(
+        "Follow-ups",
+        metric_number(follow_ups)
+    )
+    r2.metric(
+        "Cross-partner editorial relations",
+        metric_number(cross_partner_relations)
+    )
+    r3.metric(
+        "Content → Distribution → Impact",
+        "Visible" if not metrics_snapshots.empty else "Partial"
+    )
+
     st.caption(
         "Social reach is the sum of the latest platform reach snapshots; "
         "it is not a deduplicated unique-audience figure."
     )
 
-    left, right = st.columns(2)
 
-    with left:
+    st.markdown("#### Publications by partner")
 
-        st.markdown("#### Publications by partner")
+    by_media = (
+        filtered_articles
+        .groupby("media", dropna=False)
+        .size()
+        .reset_index(name="articles")
+        .sort_values("articles", ascending=False)
+    )
 
-        by_media = (
-            filtered_articles
-            .groupby("media", dropna=False)
-            .size()
+    if len(by_media):
+        fig = px.bar(
+            by_media,
+            x="media",
+            y="articles",
+            labels={
+                "media": "Partner",
+                "articles": "Articles"
+            }
+        )
+        fig.update_layout(
+            showlegend=False,
+            margin=dict(l=10, r=10, t=10, b=10)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+
+    st.markdown("#### Audience by partner")
+
+    partner_perf = (
+        overview_perf
+        .groupby("media", as_index=False)
+        .agg(
+            website_views=("website_views", "sum"),
+            social_reach=("social_reach", "sum"),
+        )
+    )
+
+    if not partner_perf.empty:
+        partner_long = partner_perf.melt(
+            id_vars=["media"],
+            value_vars=["website_views", "social_reach"],
+            var_name="metric",
+            value_name="value"
+        )
+        partner_long["metric"] = partner_long["metric"].map({
+            "website_views": "Website views",
+            "social_reach": "Social reach",
+        })
+
+        fig = px.bar(
+            partner_long,
+            x="media",
+            y="value",
+            color="metric",
+            barmode="group",
+            labels={
+                "media": "Partner",
+                "value": "Audience metric",
+                "metric": "Metric",
+            }
+        )
+        fig.update_layout(
+            margin=dict(l=10, r=10, t=10, b=10)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+
+    st.markdown("#### Publishing over time")
+
+    trend = (
+        filtered_articles
+        .dropna(subset=["published_at"])
+        .assign(day=lambda x: x["published_at"].dt.date)
+        .groupby(["day", "media"])
+        .size()
+        .reset_index(name="articles")
+    )
+
+    if len(trend):
+        fig = px.line(
+            trend,
+            x="day",
+            y="articles",
+            color="media",
+            markers=True,
+            labels={
+                "day": "Date",
+                "articles": "Articles",
+                "media": "Partner"
+            }
+        )
+        fig.update_layout(
+            margin=dict(l=10, r=10, t=10, b=10)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+
+    st.markdown("#### Social reach by platform")
+
+    social_scope = social_latest.copy()
+
+    if not social_scope.empty:
+        if selected_media and "media" in social_scope.columns:
+            social_scope = social_scope[
+                social_scope["media"].isin(selected_media)
+            ]
+
+        if (
+            selected_dates
+            and isinstance(selected_dates, (tuple, list))
+            and len(selected_dates) == 2
+            and "post_published_at" in social_scope.columns
+        ):
+            start_date, end_date = selected_dates
+            social_scope = social_scope[
+                social_scope["post_published_at"]
+                .dt.date
+                .between(start_date, end_date)
+            ]
+
+    if not social_scope.empty:
+        by_platform = (
+            social_scope
+            .groupby("platform", as_index=False)
+            .agg(reach=("reach_count", "sum"))
+            .sort_values("reach", ascending=False)
+        )
+
+        fig = px.bar(
+            by_platform,
+            x="platform",
+            y="reach",
+            labels={
+                "platform": "Platform",
+                "reach": "Reach"
+            }
+        )
+        fig.update_layout(
+            showlegend=False,
+            margin=dict(l=10, r=10, t=10, b=10)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No social metrics match these filters.")
+
+
+    st.markdown("#### Content → Distribution → Impact by partner")
+
+    cdi_rows = []
+    for partner in sorted(filtered_articles["media"].dropna().unique()):
+        p_articles = filtered_articles[filtered_articles["media"].eq(partner)]
+        p_ids = set(p_articles["id"])
+        p_perf = overview_perf[overview_perf["article_id"].isin(p_ids)]
+        p_social = filtered_social_posts[
+            filtered_social_posts["media"].eq(partner)
+        ] if (not filtered_social_posts.empty and "media" in filtered_social_posts.columns) else pd.DataFrame()
+        external_value = 0
+        if not citations.empty and "cited_article_id" in citations.columns:
+            external_value += citations[
+                citations["cited_article_id"].isin(p_ids)
+                & ~citations["citing_article_id"].isin(p_ids)
+            ].shape[0]
+        if not article_relations.empty and "source_article_id" in article_relations.columns:
+            external_value += article_relations[
+                article_relations["source_article_id"].isin(p_ids)
+                & ~article_relations["related_article_id"].isin(p_ids)
+            ].shape[0]
+        cdi_rows.append({
+            "Partner": partner,
+            "Website articles": len(p_articles),
+            "Social posts": len(p_social),
+            "Website views": sum_metric(p_perf, "website_views"),
+            "Social reach": sum_metric(p_perf, "social_reach"),
+            "Cross-partner use / reference": external_value,
+        })
+
+    cdi = pd.DataFrame(cdi_rows)
+    if not cdi.empty:
+        st.dataframe(
+            cdi,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Website views": st.column_config.NumberColumn("Website views", format="%d"),
+                "Social reach": st.column_config.NumberColumn("Social reach", format="%d"),
+            }
+        )
+
+    st.markdown("#### Website views by publication date")
+    web_trend = (
+        overview_perf.dropna(subset=["published_at"])
+        .assign(day=lambda x: x["published_at"].dt.date)
+        .groupby(["day", "media"], as_index=False)
+        .agg(views=("website_views", "sum"))
+    )
+    if not web_trend.empty:
+        fig = px.line(
+            web_trend, x="day", y="views", color="media", markers=True,
+            labels={"day": "Publication date", "views": "Final website views", "media": "Partner"}
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("#### Social reach by publication date")
+    reach_trend = (
+        overview_perf.dropna(subset=["published_at"])
+        .assign(day=lambda x: x["published_at"].dt.date)
+        .groupby(["day", "media"], as_index=False)
+        .agg(reach=("social_reach", "sum"))
+    )
+    if not reach_trend.empty:
+        fig = px.line(
+            reach_trend, x="day", y="reach", color="media", markers=True,
+            labels={"day": "Website publication date", "reach": "Associated social reach", "media": "Partner"}
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("#### Top topics")
+
+    if not filtered_topics.empty:
+        top_topics = (
+            filtered_topics
+            .groupby("topic")["article_id"]
+            .nunique()
             .reset_index(name="articles")
             .sort_values("articles", ascending=False)
+            .head(12)
         )
 
-        if len(by_media):
-            fig = px.bar(
-                by_media,
-                x="media",
-                y="articles",
-                labels={
-                    "media": "Partner",
-                    "articles": "Articles"
-                }
-            )
-            fig.update_layout(
-                showlegend=False,
-                margin=dict(l=10, r=10, t=10, b=10)
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-    with right:
-
-        st.markdown("#### Audience by partner")
-
-        partner_perf = (
-            overview_perf
-            .groupby("media", as_index=False)
-            .agg(
-                website_views=("website_views", "sum"),
-                social_reach=("social_reach", "sum"),
-            )
+        fig = px.bar(
+            top_topics,
+            x="articles",
+            y="topic",
+            orientation="h",
+            labels={
+                "articles": "Articles",
+                "topic": "Topic"
+            }
         )
+        fig.update_layout(
+            yaxis={"categoryorder": "total ascending"},
+            margin=dict(l=10, r=10, t=10, b=10)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Topic data is not available.")
 
-        if not partner_perf.empty:
-            partner_long = partner_perf.melt(
-                id_vars=["media"],
-                value_vars=["website_views", "social_reach"],
-                var_name="metric",
-                value_name="value"
-            )
-            partner_long["metric"] = partner_long["metric"].map({
-                "website_views": "Website views",
-                "social_reach": "Social reach",
-            })
+    st.divider()
 
-            fig = px.bar(
-                partner_long,
-                x="media",
-                y="value",
-                color="metric",
-                barmode="group",
-                labels={
-                    "media": "Partner",
-                    "value": "Audience metric",
-                    "metric": "Metric",
-                }
-            )
-            fig.update_layout(
-                margin=dict(l=10, r=10, t=10, b=10)
-            )
-            st.plotly_chart(fig, use_container_width=True)
+    st.markdown("#### Top people")
 
-    left, right = st.columns(2)
+    people = (
+        filtered_entities[
+            filtered_entities["entity_type"] == "person"
+        ]
+        if (
+            not filtered_entities.empty
+            and "entity_type" in filtered_entities.columns
+        )
+        else pd.DataFrame()
+    )
 
-    with left:
-
-        st.markdown("#### Publishing over time")
-
-        trend = (
-            filtered_articles
-            .dropna(subset=["published_at"])
-            .assign(day=lambda x: x["published_at"].dt.date)
-            .groupby(["day", "media"])
-            .size()
+    if not people.empty:
+        top_people = (
+            people
+            .groupby("entity")["article_id"]
+            .nunique()
             .reset_index(name="articles")
+            .sort_values("articles", ascending=False)
+            .head(12)
         )
 
-        if len(trend):
-            fig = px.line(
-                trend,
-                x="day",
-                y="articles",
-                color="media",
-                markers=True,
-                labels={
-                    "day": "Date",
-                    "articles": "Articles",
-                    "media": "Partner"
-                }
-            )
-            fig.update_layout(
-                margin=dict(l=10, r=10, t=10, b=10)
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-    with right:
-
-        st.markdown("#### Social reach by platform")
-
-        social_scope = social_latest.copy()
-
-        if not social_scope.empty:
-            if selected_media and "media" in social_scope.columns:
-                social_scope = social_scope[
-                    social_scope["media"].isin(selected_media)
-                ]
-
-            if (
-                selected_dates
-                and isinstance(selected_dates, (tuple, list))
-                and len(selected_dates) == 2
-                and "post_published_at" in social_scope.columns
-            ):
-                start_date, end_date = selected_dates
-                social_scope = social_scope[
-                    social_scope["post_published_at"]
-                    .dt.date
-                    .between(start_date, end_date)
-                ]
-
-        if not social_scope.empty:
-            by_platform = (
-                social_scope
-                .groupby("platform", as_index=False)
-                .agg(reach=("reach_count", "sum"))
-                .sort_values("reach", ascending=False)
-            )
-
-            fig = px.bar(
-                by_platform,
-                x="platform",
-                y="reach",
-                labels={
-                    "platform": "Platform",
-                    "reach": "Reach"
-                }
-            )
-            fig.update_layout(
-                showlegend=False,
-                margin=dict(l=10, r=10, t=10, b=10)
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("No social metrics match these filters.")
-
-    left, right = st.columns(2)
-
-    with left:
-
-        st.markdown("#### Top topics")
-
-        if not filtered_topics.empty:
-            top_topics = (
-                filtered_topics
-                .groupby("topic")["article_id"]
-                .nunique()
-                .reset_index(name="articles")
-                .sort_values("articles", ascending=False)
-                .head(12)
-            )
-
-            fig = px.bar(
-                top_topics,
-                x="articles",
-                y="topic",
-                orientation="h",
-                labels={
-                    "articles": "Articles",
-                    "topic": "Topic"
-                }
-            )
-            fig.update_layout(
-                yaxis={"categoryorder": "total ascending"},
-                margin=dict(l=10, r=10, t=10, b=10)
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Topic data is not available.")
-
-    with right:
-
-        st.markdown("#### Top people")
-
-        people = (
-            filtered_entities[
-                filtered_entities["entity_type"] == "person"
-            ]
-            if (
-                not filtered_entities.empty
-                and "entity_type" in filtered_entities.columns
-            )
-            else pd.DataFrame()
+        fig = px.bar(
+            top_people,
+            x="articles",
+            y="entity",
+            orientation="h",
+            labels={
+                "articles": "Articles",
+                "entity": "Person"
+            }
         )
-
-        if not people.empty:
-            top_people = (
-                people
-                .groupby("entity")["article_id"]
-                .nunique()
-                .reset_index(name="articles")
-                .sort_values("articles", ascending=False)
-                .head(12)
-            )
-
-            fig = px.bar(
-                top_people,
-                x="articles",
-                y="entity",
-                orientation="h",
-                labels={
-                    "articles": "Articles",
-                    "entity": "Person"
-                }
-            )
-            fig.update_layout(
-                yaxis={"categoryorder": "total ascending"},
-                margin=dict(l=10, r=10, t=10, b=10)
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("People data is not available.")
+        fig.update_layout(
+            yaxis={"categoryorder": "total ascending"},
+            margin=dict(l=10, r=10, t=10, b=10)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("People data is not available.")
 
 
 # =========================================================
@@ -1734,6 +1821,44 @@ with tabs[1]:
         st.info("No topic assignments available.")
 
     else:
+
+        st.markdown("#### Topics that travel furthest")
+        topic_value_rows = []
+        for topic_name, grp in topic_expanded[
+            topic_expanded["article_id"].isin(filtered_article_ids)
+        ].groupby("topic"):
+            ids = set(grp["article_id"].dropna())
+            perf = associated_performance(ids)
+            shared = (
+                story_memberships[story_memberships["article_id"].isin(ids)]["cluster_id"].nunique()
+                if not story_memberships.empty else 0
+            )
+            cited = (
+                citations[citations["cited_article_id"].isin(ids)].shape[0]
+                if (not citations.empty and "cited_article_id" in citations.columns) else 0
+            )
+            pickups = (
+                article_relations[
+                    article_relations["source_article_id"].isin(ids)
+                    & article_relations["relation_type"].eq("possible_pickup")
+                ].shape[0]
+                if (not article_relations.empty and {"source_article_id","relation_type"}.issubset(article_relations.columns)) else 0
+            )
+            topic_value_rows.append({
+                "Topic": topic_name,
+                "Articles": len(ids),
+                "Partners": grp["media"].nunique(),
+                "Shared stories": shared,
+                "Citations by partners": cited,
+                "Possible pickups": pickups,
+                "Website views": perf["website_views"],
+                "Social reach": perf["social_reach"],
+            })
+        topic_value = pd.DataFrame(topic_value_rows).sort_values(
+            ["Social reach", "Articles"], ascending=False
+        )
+        if not topic_value.empty:
+            st.dataframe(topic_value, hide_index=True, use_container_width=True)
 
         topic_options = sorted(
             topic_expanded[
@@ -1813,102 +1938,99 @@ with tabs[1]:
             else "—"
         )
 
-        left, right = st.columns(2)
 
-        with left:
+        st.markdown(
+            f"#### Who publishes about {selected_topic}"
+        )
 
-            st.markdown(
-                f"#### Who publishes about {selected_topic}"
+        by_media = (
+            subset
+            .groupby("media")[
+                "article_id"
+            ]
+            .nunique()
+            .reset_index(
+                name="articles"
+            )
+            .sort_values(
+                "articles",
+                ascending=False
+            )
+        )
+
+        if len(by_media):
+
+            fig = px.bar(
+                by_media,
+                x="media",
+                y="articles",
+                labels={
+                    "media": "Partner",
+                    "articles": "Articles"
+                }
             )
 
-            by_media = (
-                subset
-                .groupby("media")[
-                    "article_id"
+            fig.update_layout(
+                showlegend=False
+            )
+
+            st.plotly_chart(
+                fig,
+                use_container_width=True
+            )
+
+        st.divider()
+
+        st.markdown(
+            "#### Topic publishing over time"
+        )
+
+        trend = (
+            subset
+            .dropna(
+                subset=[
+                    "published_at"
                 ]
-                .nunique()
-                .reset_index(
-                    name="articles"
-                )
-                .sort_values(
-                    "articles",
-                    ascending=False
-                )
             )
-
-            if len(by_media):
-
-                fig = px.bar(
-                    by_media,
-                    x="media",
-                    y="articles",
-                    labels={
-                        "media": "Partner",
-                        "articles": "Articles"
-                    }
-                )
-
-                fig.update_layout(
-                    showlegend=False
-                )
-
-                st.plotly_chart(
-                    fig,
-                    use_container_width=True
-                )
-
-        with right:
-
-            st.markdown(
-                "#### Topic publishing over time"
+            .assign(
+                day=lambda x:
+                x[
+                    "published_at"
+                ].dt.date
             )
-
-            trend = (
-                subset
-                .dropna(
-                    subset=[
-                        "published_at"
-                    ]
-                )
-                .assign(
-                    day=lambda x:
-                    x[
-                        "published_at"
-                    ].dt.date
-                )
-                .groupby(
-                    [
-                        "day",
-                        "media"
-                    ]
-                )[
-                    "article_id"
+            .groupby(
+                [
+                    "day",
+                    "media"
                 ]
-                .nunique()
-                .reset_index(
-                    name="articles"
-                )
+            )[
+                "article_id"
+            ]
+            .nunique()
+            .reset_index(
+                name="articles"
+            )
+        )
+
+        if len(trend):
+
+            fig = px.line(
+                trend,
+                x="day",
+                y="articles",
+                color="media",
+                markers=True,
+                labels={
+                    "day": "Date",
+                    "articles": "Articles",
+                    "media": "Partner"
+                }
             )
 
-            if len(trend):
-
-                fig = px.line(
-                    trend,
-                    x="day",
-                    y="articles",
-                    color="media",
-                    markers=True,
-                    labels={
-                        "day": "Date",
-                        "articles": "Articles",
-                        "media": "Partner"
-                    }
-                )
-
-                st.plotly_chart(
-                    fig,
-                    use_container_width=True
-                )
+            st.plotly_chart(
+                fig,
+                use_container_width=True
+            )
 
         st.markdown("#### Recent publications")
 
@@ -2004,194 +2126,210 @@ with tabs[2]:
                 in str(x).lower()
             ]
 
-        left, right = st.columns(
-            [1, 2]
+        st.markdown("#### Most mentioned")
+
+        ranking = (
+            type_subset
+            .groupby("entity")
+            .agg(
+                articles=(
+                    "article_id",
+                    "nunique"
+                ),
+                partners=(
+                    "media",
+                    "nunique"
+                )
+            )
+            .reset_index()
+            .sort_values(
+                [
+                    "articles",
+                    "partners"
+                ],
+                ascending=[
+                    False,
+                    False
+                ]
+            )
+            .head(30)
         )
 
-        with left:
+        if not ranking.empty:
+            ranking["Associated social reach"] = ranking["entity"].map(
+                lambda entity_name: associated_performance(
+                    set(
+                        type_subset[
+                            type_subset["entity"].eq(entity_name)
+                        ]["article_id"].dropna()
+                    )
+                )["social_reach"]
+            )
+            ranking = ranking.sort_values(
+                ["Associated social reach", "articles"],
+                ascending=False
+            )
 
-            st.markdown("#### Most mentioned")
+        st.dataframe(
+            ranking,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "entity": "Entity",
+                "articles": "Articles",
+                "partners": "Partners",
+                "Associated social reach": st.column_config.NumberColumn(
+                    "Associated social reach", format="%d"
+                ),
+            }
+        )
 
-            ranking = (
-                type_subset
-                .groupby("entity")
-                .agg(
-                    articles=(
+        st.divider()
+
+        if entity_options:
+
+            selected_entity = st.selectbox(
+                "Inspect entity",
+                entity_options
+            )
+
+            selected_rows = type_subset[
+                type_subset[
+                    "entity"
+                ] == selected_entity
+            ].copy()
+
+            c1, c2 = st.columns(2)
+
+            c1.metric(
+                "Publications",
+                selected_rows[
+                    "article_id"
+                ].nunique()
+            )
+
+            c2.metric(
+                "Partners",
+                selected_rows[
+                    "media"
+                ].nunique()
+            )
+
+            by_media = (
+                selected_rows
+                .groupby("media")[
+                    "article_id"
+                ]
+                .nunique()
+                .reset_index(
+                    name="articles"
+                )
+            )
+
+            if len(by_media):
+
+                fig = px.bar(
+                    by_media,
+                    x="media",
+                    y="articles",
+                    labels={
+                        "media": "Partner",
+                        "articles": "Articles"
+                    }
+                )
+
+                fig.update_layout(
+                    showlegend=False
+                )
+
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True
+                )
+
+            st.markdown(
+                f"#### Recent publications mentioning {selected_entity}"
+            )
+
+            selected_articles = (
+                selected_rows[
+                    [
                         "article_id",
-                        "nunique"
-                    ),
-                    partners=(
+                        "published_at",
                         "media",
-                        "nunique"
+                        "title",
+                        "article_url"
+                    ]
+                ]
+                .drop_duplicates(
+                    "article_id"
+                )
+            )
+
+            article_table(
+                selected_articles
+            )
+
+            # Co-occurring entities
+            selected_article_ids = set(
+                selected_rows[
+                    "article_id"
+                ]
+            )
+
+            co = entity_expanded[
+                (
+                    entity_expanded[
+                        "article_id"
+                    ].isin(
+                        selected_article_ids
                     )
                 )
-                .reset_index()
-                .sort_values(
-                    [
-                        "articles",
-                        "partners"
-                    ],
-                    ascending=[
-                        False,
-                        False
-                    ]
-                )
-                .head(30)
-            )
-
-            st.dataframe(
-                ranking,
-                hide_index=True,
-                use_container_width=True
-            )
-
-        with right:
-
-            if entity_options:
-
-                selected_entity = st.selectbox(
-                    "Inspect entity",
-                    entity_options
-                )
-
-                selected_rows = type_subset[
-                    type_subset[
+                &
+                (
+                    entity_expanded[
                         "entity"
-                    ] == selected_entity
-                ].copy()
-
-                c1, c2 = st.columns(2)
-
-                c1.metric(
-                    "Publications",
-                    selected_rows[
-                        "article_id"
-                    ].nunique()
+                    ] != selected_entity
                 )
+            ]
 
-                c2.metric(
-                    "Partners",
-                    selected_rows[
-                        "media"
-                    ].nunique()
-                )
+            if not co.empty:
 
-                by_media = (
-                    selected_rows
-                    .groupby("media")[
+                co_rank = (
+                    co
+                    .groupby(
+                        [
+                            "entity",
+                            "entity_type"
+                        ]
+                    )[
                         "article_id"
                     ]
                     .nunique()
                     .reset_index(
-                        name="articles"
+                        name="shared_articles"
                     )
+                    .sort_values(
+                        "shared_articles",
+                        ascending=False
+                    )
+                    .head(20)
                 )
-
-                if len(by_media):
-
-                    fig = px.bar(
-                        by_media,
-                        x="media",
-                        y="articles",
-                        labels={
-                            "media": "Partner",
-                            "articles": "Articles"
-                        }
-                    )
-
-                    fig.update_layout(
-                        showlegend=False
-                    )
-
-                    st.plotly_chart(
-                        fig,
-                        use_container_width=True
-                    )
 
                 st.markdown(
-                    f"#### Recent publications mentioning {selected_entity}"
+                    "#### Often appears in the same publications"
                 )
 
-                selected_articles = (
-                    selected_rows[
-                        [
-                            "article_id",
-                            "published_at",
-                            "media",
-                            "title",
-                            "article_url"
-                        ]
-                    ]
-                    .drop_duplicates(
-                        "article_id"
-                    )
+                st.dataframe(
+                    co_rank,
+                    hide_index=True,
+                    use_container_width=True
                 )
 
-                article_table(
-                    selected_articles
-                )
-
-                # Co-occurring entities
-                selected_article_ids = set(
-                    selected_rows[
-                        "article_id"
-                    ]
-                )
-
-                co = entity_expanded[
-                    (
-                        entity_expanded[
-                            "article_id"
-                        ].isin(
-                            selected_article_ids
-                        )
-                    )
-                    &
-                    (
-                        entity_expanded[
-                            "entity"
-                        ] != selected_entity
-                    )
-                ]
-
-                if not co.empty:
-
-                    co_rank = (
-                        co
-                        .groupby(
-                            [
-                                "entity",
-                                "entity_type"
-                            ]
-                        )[
-                            "article_id"
-                        ]
-                        .nunique()
-                        .reset_index(
-                            name="shared_articles"
-                        )
-                        .sort_values(
-                            "shared_articles",
-                            ascending=False
-                        )
-                        .head(20)
-                    )
-
-                    st.markdown(
-                        "#### Often appears in the same publications"
-                    )
-
-                    st.dataframe(
-                        co_rank,
-                        hide_index=True,
-                        use_container_width=True
-                    )
-
-            else:
-                st.info(
-                    "No entities match this search and filter."
-                )
-
+        else:
+            st.info(
+                "No entities match this search and filter."
+            )
 
 # =========================================================
 # 4. PUBLICATIONS EXPLORER
@@ -2529,99 +2667,96 @@ with tabs[4]:
                 direct_partner.columns
             )
         ):
-            left, right = st.columns(2)
+            st.markdown("#### Partner-to-partner citation flow")
 
-            with left:
-                st.markdown("#### Partner-to-partner citation flow")
+            flows = (
+                direct_partner
+                .dropna(subset=["citing_media", "cited_media"])
+                .groupby(["citing_media", "cited_media"])
+                .size()
+                .reset_index(name="citations")
+            )
 
-                flows = (
-                    direct_partner
-                    .dropna(subset=["citing_media", "cited_media"])
-                    .groupby(["citing_media", "cited_media"])
-                    .size()
-                    .reset_index(name="citations")
+            if len(flows):
+                labels = sorted(
+                    set(flows["citing_media"])
+                    | set(flows["cited_media"])
                 )
+                label_index = {
+                    label: i
+                    for i, label in enumerate(labels)
+                }
 
-                if len(flows):
-                    labels = sorted(
-                        set(flows["citing_media"])
-                        | set(flows["cited_media"])
-                    )
-                    label_index = {
-                        label: i
-                        for i, label in enumerate(labels)
-                    }
-
-                    fig = go.Figure(
-                        data=[
-                            go.Sankey(
-                                node=dict(label=labels),
-                                link=dict(
-                                    source=[
-                                        label_index[x]
-                                        for x in flows["citing_media"]
-                                    ],
-                                    target=[
-                                        label_index[x]
-                                        for x in flows["cited_media"]
-                                    ],
-                                    value=flows["citations"].tolist()
-                                )
+                fig = go.Figure(
+                    data=[
+                        go.Sankey(
+                            node=dict(label=labels),
+                            link=dict(
+                                source=[
+                                    label_index[x]
+                                    for x in flows["citing_media"]
+                                ],
+                                target=[
+                                    label_index[x]
+                                    for x in flows["cited_media"]
+                                ],
+                                value=flows["citations"].tolist()
                             )
-                        ]
-                    )
-                    fig.update_layout(
-                        margin=dict(l=10, r=10, t=10, b=10)
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-
-            with right:
-                st.markdown("#### Distribution of citing publications")
-
-                impact = direct_partner.copy()
-                impact["pair"] = (
-                    impact["citing_media"].astype(str)
-                    + " → "
-                    + impact["cited_media"].astype(str)
-                )
-                impact = (
-                    impact
-                    .groupby("pair", as_index=False)
-                    .agg(
-                        citations=("id", "count"),
-                        social_reach=("citing_social_reach", "sum"),
-                        website_views=("citing_web_views", "sum"),
-                    )
-                    .sort_values("social_reach", ascending=False)
-                )
-
-                impact_long = impact.melt(
-                    id_vars=["pair"],
-                    value_vars=["website_views", "social_reach"],
-                    var_name="metric",
-                    value_name="value"
-                )
-                impact_long["metric"] = impact_long["metric"].map({
-                    "website_views": "Website views",
-                    "social_reach": "Social reach",
-                })
-
-                fig = px.bar(
-                    impact_long,
-                    x="pair",
-                    y="value",
-                    color="metric",
-                    barmode="group",
-                    labels={
-                        "pair": "Citation direction",
-                        "value": "Audience metric",
-                        "metric": "Metric",
-                    }
+                        )
+                    ]
                 )
                 fig.update_layout(
                     margin=dict(l=10, r=10, t=10, b=10)
                 )
                 st.plotly_chart(fig, use_container_width=True)
+
+            st.divider()
+            st.markdown("#### Distribution of citing publications")
+
+            impact = direct_partner.copy()
+            impact["pair"] = (
+                impact["citing_media"].astype(str)
+                + " → "
+                + impact["cited_media"].astype(str)
+            )
+            impact = (
+                impact
+                .groupby("pair", as_index=False)
+                .agg(
+                    citations=("id", "count"),
+                    social_reach=("citing_social_reach", "sum"),
+                    website_views=("citing_web_views", "sum"),
+                )
+                .sort_values("social_reach", ascending=False)
+            )
+
+            impact_long = impact.melt(
+                id_vars=["pair"],
+                value_vars=["website_views", "social_reach"],
+                var_name="metric",
+                value_name="value"
+            )
+            impact_long["metric"] = impact_long["metric"].map({
+                "website_views": "Website views",
+                "social_reach": "Social reach",
+            })
+
+            fig = px.bar(
+                impact_long,
+                x="pair",
+                y="value",
+                color="metric",
+                barmode="group",
+                labels={
+                    "pair": "Citation direction",
+                    "value": "Audience metric",
+                    "metric": "Metric",
+                }
+            )
+            fig.update_layout(
+                margin=dict(l=10, r=10, t=10, b=10)
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
         st.markdown("#### Citation records")
         st.caption(
@@ -2644,6 +2779,8 @@ with tabs[4]:
                     "cited_title",
                     "citing_web_views",
                     "citing_social_reach",
+                    "cited_web_views",
+                    "cited_social_reach",
                     "citing_topics",
                     "citing_people",
                     "citation_type",
@@ -2677,6 +2814,14 @@ with tabs[4]:
                     "Citing social reach",
                     format="%d"
                 ),
+                "cited_web_views": st.column_config.NumberColumn(
+                    "Cited web views",
+                    format="%d"
+                ),
+                "cited_social_reach": st.column_config.NumberColumn(
+                    "Cited social reach",
+                    format="%d"
+                ),
                 "citing_topics": "Topics",
                 "citing_people": "People",
                 "citation_type": "Citation type",
@@ -2702,67 +2847,64 @@ with tabs[4]:
 
             st.markdown("#### Citation detail")
 
-            left, right = st.columns(2)
+            st.markdown(
+                f"**Citing: {citation_row.get('citing_media', '—')}**"
+            )
+            st.write(citation_row.get("citing_title", "—"))
+            st.write(
+                f"Website views: **{compact_number(citation_row.get('citing_web_views', 0))}**"
+            )
+            st.write(
+                f"Social reach: **{compact_number(citation_row.get('citing_social_reach', 0))}**"
+            )
+            st.write(
+                "Topics: "
+                + (citation_row.get("citing_topics", "") or "—")
+            )
+            st.write(
+                "People: "
+                + (citation_row.get("citing_people", "") or "—")
+            )
+            st.write(
+                "Other entities: "
+                + (citation_row.get("citing_entities", "") or "—")
+            )
 
-            with left:
-                st.markdown(
-                    f"**Citing: {citation_row.get('citing_media', '—')}**"
-                )
-                st.write(citation_row.get("citing_title", "—"))
-                st.write(
-                    f"Website views: **{compact_number(citation_row.get('citing_web_views', 0))}**"
-                )
-                st.write(
-                    f"Social reach: **{compact_number(citation_row.get('citing_social_reach', 0))}**"
-                )
-                st.write(
-                    "Topics: "
-                    + (citation_row.get("citing_topics", "") or "—")
-                )
-                st.write(
-                    "People: "
-                    + (citation_row.get("citing_people", "") or "—")
-                )
-                st.write(
-                    "Other entities: "
-                    + (citation_row.get("citing_entities", "") or "—")
-                )
-
-                if pd.notna(citation_row.get("citing_url")):
-                    st.link_button(
-                        "Open citing article",
-                        citation_row.get("citing_url")
-                    )
-
-            with right:
-                st.markdown(
-                    f"**Cited: {citation_row.get('cited_media', '—')}**"
-                )
-                st.write(citation_row.get("cited_title", "—"))
-                st.write(
-                    f"Website views: **{compact_number(citation_row.get('cited_web_views', 0))}**"
-                )
-                st.write(
-                    f"Social reach: **{compact_number(citation_row.get('cited_social_reach', 0))}**"
-                )
-                st.write(
-                    "Topics: "
-                    + (citation_row.get("cited_topics", "") or "—")
-                )
-                st.write(
-                    "People: "
-                    + (citation_row.get("cited_people", "") or "—")
-                )
-                st.write(
-                    "Other entities: "
-                    + (citation_row.get("cited_entities", "") or "—")
+            if pd.notna(citation_row.get("citing_url")):
+                st.link_button(
+                    "Open citing article",
+                    citation_row.get("citing_url")
                 )
 
-                if pd.notna(citation_row.get("cited_url")):
-                    st.link_button(
-                        "Open cited article",
-                        citation_row.get("cited_url")
-                    )
+            st.divider()
+            st.markdown(
+                f"**Cited: {citation_row.get('cited_media', '—')}**"
+            )
+            st.write(citation_row.get("cited_title", "—"))
+            st.write(
+                f"Website views: **{compact_number(citation_row.get('cited_web_views', 0))}**"
+            )
+            st.write(
+                f"Social reach: **{compact_number(citation_row.get('cited_social_reach', 0))}**"
+            )
+            st.write(
+                "Topics: "
+                + (citation_row.get("cited_topics", "") or "—")
+            )
+            st.write(
+                "People: "
+                + (citation_row.get("cited_people", "") or "—")
+            )
+            st.write(
+                "Other entities: "
+                + (citation_row.get("cited_entities", "") or "—")
+            )
+
+            if pd.notna(citation_row.get("cited_url")):
+                st.link_button(
+                    "Open cited article",
+                    citation_row.get("cited_url")
+                )
 
             evidence = citation_row.get("evidence_text")
             if pd.notna(evidence) and str(evidence).strip():
@@ -2842,9 +2984,40 @@ with tabs[5]:
                 if pd.isna(first_published):
                     first_published = first_row.get("published_at")
 
+                story_perf_summary = associated_performance(article_ids)
+
+                story_rel = (
+                    article_relations[
+                        article_relations["source_article_id"].isin(article_ids)
+                        | article_relations["related_article_id"].isin(article_ids)
+                    ]
+                    if (
+                        not article_relations.empty
+                        and {"source_article_id", "related_article_id"}.issubset(
+                            article_relations.columns
+                        )
+                    )
+                    else pd.DataFrame()
+                )
+
+                story_cit = (
+                    citations[
+                        citations["citing_article_id"].isin(article_ids)
+                        | citations["cited_article_id"].isin(article_ids)
+                    ]
+                    if (
+                        not citations.empty
+                        and {"citing_article_id", "cited_article_id"}.issubset(
+                            citations.columns
+                        )
+                    )
+                    else pd.DataFrame()
+                )
+
                 story_rows.append({
                     "cluster_id": cluster_id,
                     "First published": first_published,
+                    "First publisher": first_row.get("media"),
                     "First headline": first_row.get("title"),
                     "Articles": len(article_ids),
                     "Partners": cluster_df["media"].nunique(),
@@ -2855,6 +3028,17 @@ with tabs[5]:
                             and "social_post_id" in story_social.columns
                         )
                         else len(story_social)
+                    ),
+                    "Web views": story_perf_summary["website_views"],
+                    "Social reach": story_perf_summary["social_reach"],
+                    "Citations": len(story_cit),
+                    "Possible pickups": (
+                        int(story_rel["relation_type"].eq("possible_pickup").sum())
+                        if not story_rel.empty else 0
+                    ),
+                    "Follow-ups": (
+                        int(story_rel["relation_type"].eq("follow_up").sum())
+                        if not story_rel.empty else 0
                     ),
                     "Cluster confidence": first_row.get(
                         "cluster_confidence"
@@ -2882,10 +3066,16 @@ with tabs[5]:
             story_display = story_index[
                 [
                     "First published",
+                    "First publisher",
                     "First headline",
                     "Articles",
                     "Partners",
                     "Social posts",
+                    "Web views",
+                    "Social reach",
+                    "Citations",
+                    "Possible pickups",
+                    "Follow-ups",
                     "Cluster confidence",
                     "Topics",
                     "People",
@@ -2905,7 +3095,23 @@ with tabs[5]:
                         "First published",
                         format="YYYY-MM-DD HH:mm"
                     ),
+                    "First publisher": "First publisher",
                     "First headline": "First headline",
+                    "Web views": st.column_config.NumberColumn(
+                        "Web views", format="%d"
+                    ),
+                    "Social reach": st.column_config.NumberColumn(
+                        "Social reach", format="%d"
+                    ),
+                    "Citations": st.column_config.NumberColumn(
+                        "Citations", format="%d"
+                    ),
+                    "Possible pickups": st.column_config.NumberColumn(
+                        "Possible pickups", format="%d"
+                    ),
+                    "Follow-ups": st.column_config.NumberColumn(
+                        "Follow-ups", format="%d"
+                    ),
                     "Articles": st.column_config.NumberColumn(
                         "Articles",
                         format="%d"
@@ -3039,44 +3245,41 @@ with tabs[5]:
                     else pd.DataFrame()
                 )
 
-                meta_left, meta_right = st.columns(2)
+                st.markdown("**Topics**")
+                st.write(
+                    join_unique(story_topics["topic"], limit=10)
+                    if not story_topics.empty
+                    else "—"
+                )
 
-                with meta_left:
-                    st.markdown("**Topics**")
-                    st.write(
-                        join_unique(story_topics["topic"], limit=10)
-                        if not story_topics.empty
-                        else "—"
+                st.markdown("**People**")
+                st.write(
+                    join_unique(
+                        story_entities[
+                            story_entities["entity_type"].eq("person")
+                        ]["entity"],
+                        limit=10
                     )
+                    if not story_entities.empty
+                    else "—"
+                )
 
-                    st.markdown("**People**")
-                    st.write(
-                        join_unique(
-                            story_entities[
-                                story_entities["entity_type"].eq("person")
-                            ]["entity"],
-                            limit=10
-                        )
-                        if not story_entities.empty
-                        else "—"
+                st.divider()
+                st.markdown("**Organizations, locations and events**")
+                st.write(
+                    join_unique(
+                        story_entities[
+                            ~story_entities["entity_type"].eq("person")
+                        ]["entity"],
+                        limit=12
                     )
-
-                with meta_right:
-                    st.markdown("**Organizations, locations and events**")
-                    st.write(
-                        join_unique(
-                            story_entities[
-                                ~story_entities["entity_type"].eq("person")
-                            ]["entity"],
-                            limit=12
-                        )
-                        if not story_entities.empty
-                        else "—"
-                    )
-                    st.caption(
-                        "Audience figures below are summed across latest "
-                        "platform snapshots and are not deduplicated users."
-                    )
+                    if not story_entities.empty
+                    else "—"
+                )
+                st.caption(
+                    "Audience figures below are summed across latest "
+                    "platform snapshots and are not deduplicated users."
+                )
 
                 # -----------------------------------------------------
                 # Chronological journey table
@@ -3172,6 +3375,85 @@ with tabs[5]:
                         "URL": st.column_config.LinkColumn("Open"),
                     }
                 )
+
+                st.markdown("#### Evidence and editorial relations in this story")
+
+                story_relations = (
+                    article_relations[
+                        article_relations["source_article_id"].isin(story_article_ids)
+                        | article_relations["related_article_id"].isin(story_article_ids)
+                    ].copy()
+                    if (
+                        not article_relations.empty
+                        and {"source_article_id", "related_article_id"}.issubset(
+                            article_relations.columns
+                        )
+                    )
+                    else pd.DataFrame()
+                )
+
+                story_citations = (
+                    citations[
+                        citations["citing_article_id"].isin(story_article_ids)
+                        | citations["cited_article_id"].isin(story_article_ids)
+                    ].copy()
+                    if (
+                        not citations.empty
+                        and {"citing_article_id", "cited_article_id"}.issubset(
+                            citations.columns
+                        )
+                    )
+                    else pd.DataFrame()
+                )
+
+                ev1, ev2, ev3 = st.columns(3)
+                ev1.metric("Confirmed citations", len(story_citations))
+                ev2.metric(
+                    "Possible pickups",
+                    int(story_relations["relation_type"].eq("possible_pickup").sum())
+                    if not story_relations.empty else 0
+                )
+                ev3.metric(
+                    "Follow-ups",
+                    int(story_relations["relation_type"].eq("follow_up").sum())
+                    if not story_relations.empty else 0
+                )
+
+                if not story_relations.empty:
+                    rel_preview = story_relations[[
+                        c for c in [
+                            "source_article_id", "related_article_id",
+                            "relation_type", "similarity_score",
+                            "confidence", "evidence"
+                        ] if c in story_relations.columns
+                    ]].copy()
+                    rel_preview["Source"] = rel_preview["source_article_id"].map(
+                        lambda x: article_meta.set_index("id").loc[x, "title"]
+                        if x in set(article_meta["id"]) else str(x)
+                    )
+                    rel_preview["Related"] = rel_preview["related_article_id"].map(
+                        lambda x: article_meta.set_index("id").loc[x, "title"]
+                        if x in set(article_meta["id"]) else str(x)
+                    )
+                    st.dataframe(
+                        rel_preview[[
+                            c for c in [
+                                "relation_type", "Source", "Related",
+                                "confidence", "similarity_score", "evidence"
+                            ] if c in rel_preview.columns
+                        ]],
+                        hide_index=True,
+                        use_container_width=True,
+                        column_config={
+                            "relation_type": "Relation type",
+                            "confidence": st.column_config.NumberColumn(
+                                "Relation confidence", format="%.2f"
+                            ),
+                            "similarity_score": st.column_config.NumberColumn(
+                                "Semantic similarity", format="%.2f"
+                            ),
+                        }
+                    )
 
                 # -----------------------------------------------------
                 # Visual journey: bubble size = audience
@@ -3276,81 +3558,78 @@ with tabs[5]:
                 # -----------------------------------------------------
                 st.markdown("#### Which topics and mentions travelled furthest?")
 
-                left, right = st.columns(2)
+                st.markdown("##### Topics in this story")
 
-                with left:
-                    st.markdown("##### Topics in this story")
+                topic_rows = []
+                if not story_topics.empty:
+                    for topic, grp in story_topics.groupby("topic"):
+                        ids = set(grp["article_id"].dropna())
+                        perf = associated_performance(ids)
+                        topic_rows.append({
+                            "Topic": topic,
+                            "Articles": len(ids),
+                            "Partners": grp["media"].nunique(),
+                            "Website views": perf["website_views"],
+                            "Associated social reach": perf["social_reach"],
+                        })
 
-                    topic_rows = []
-                    if not story_topics.empty:
-                        for topic, grp in story_topics.groupby("topic"):
-                            ids = set(grp["article_id"].dropna())
-                            perf = associated_performance(ids)
-                            topic_rows.append({
-                                "Topic": topic,
-                                "Articles": len(ids),
-                                "Partners": grp["media"].nunique(),
-                                "Website views": perf["website_views"],
-                                "Associated social reach": perf["social_reach"],
-                            })
+                topic_spread = pd.DataFrame(topic_rows)
 
-                    topic_spread = pd.DataFrame(topic_rows)
+                if not topic_spread.empty:
+                    topic_spread = topic_spread.sort_values(
+                        "Associated social reach",
+                        ascending=False
+                    )
+                    st.dataframe(
+                        topic_spread,
+                        hide_index=True,
+                        use_container_width=True
+                    )
+                else:
+                    st.info("No topic data for this story.")
 
-                    if not topic_spread.empty:
-                        topic_spread = topic_spread.sort_values(
-                            "Associated social reach",
-                            ascending=False
-                        )
-                        st.dataframe(
-                            topic_spread,
-                            hide_index=True,
-                            use_container_width=True
-                        )
-                    else:
-                        st.info("No topic data for this story.")
+                st.divider()
+                st.markdown("##### People and entities")
 
-                with right:
-                    st.markdown("##### People and entities")
+                entity_rows = []
+                if not story_entities.empty:
+                    for (entity, entity_type), grp in story_entities.groupby(
+                        ["entity", "entity_type"]
+                    ):
+                        ids = set(grp["article_id"].dropna())
+                        perf = associated_performance(ids)
+                        entity_rows.append({
+                            "Entity": entity,
+                            "Type": entity_type,
+                            "Mentions": (
+                                int(
+                                    pd.to_numeric(
+                                        grp.get("mentions_count", 1),
+                                        errors="coerce"
+                                    ).fillna(0).sum()
+                                )
+                                if "mentions_count" in grp.columns
+                                else len(grp)
+                            ),
+                            "Articles": len(ids),
+                            "Partners": grp["media"].nunique(),
+                            "Associated social reach": perf["social_reach"],
+                        })
 
-                    entity_rows = []
-                    if not story_entities.empty:
-                        for (entity, entity_type), grp in story_entities.groupby(
-                            ["entity", "entity_type"]
-                        ):
-                            ids = set(grp["article_id"].dropna())
-                            perf = associated_performance(ids)
-                            entity_rows.append({
-                                "Entity": entity,
-                                "Type": entity_type,
-                                "Mentions": (
-                                    int(
-                                        pd.to_numeric(
-                                            grp.get("mentions_count", 1),
-                                            errors="coerce"
-                                        ).fillna(0).sum()
-                                    )
-                                    if "mentions_count" in grp.columns
-                                    else len(grp)
-                                ),
-                                "Articles": len(ids),
-                                "Partners": grp["media"].nunique(),
-                                "Associated social reach": perf["social_reach"],
-                            })
+                entity_spread = pd.DataFrame(entity_rows)
 
-                    entity_spread = pd.DataFrame(entity_rows)
-
-                    if not entity_spread.empty:
-                        entity_spread = entity_spread.sort_values(
-                            "Associated social reach",
-                            ascending=False
-                        )
-                        st.dataframe(
-                            entity_spread.head(15),
-                            hide_index=True,
-                            use_container_width=True
-                        )
-                    else:
-                        st.info("No entity data for this story.")
+                if not entity_spread.empty:
+                    entity_spread = entity_spread.sort_values(
+                        "Associated social reach",
+                        ascending=False
+                    )
+                    st.dataframe(
+                        entity_spread.head(15),
+                        hide_index=True,
+                        use_container_width=True
+                    )
+                else:
+                    st.info("No entity data for this story.")
 
                 if not story_entities.empty:
                     entity_chart_rows = []
@@ -3819,120 +4098,117 @@ with tabs[7]:
         # Coverage
         # -------------------------------------------------
 
-        left, right = st.columns(2)
+        st.markdown(
+            "#### Website → social coverage"
+        )
 
-        with left:
-            st.markdown(
-                "#### Website → social coverage"
-            )
+        coverage_rows = []
 
-            coverage_rows = []
-
-            for platform in [
-                "telegram",
-                "facebook",
-                "instagram"
-            ]:
-                if article_social_view.empty:
-                    linked = 0
-                else:
-                    tmp = article_social_view[
-                        article_social_view[
-                            "article_id"
-                        ].isin(filtered_article_ids)
-                    ]
-
-                    tmp = tmp[
-                        tmp["platform"].eq(platform)
-                    ]
-
-                    linked = tmp[
+        for platform in [
+            "telegram",
+            "facebook",
+            "instagram"
+        ]:
+            if article_social_view.empty:
+                linked = 0
+            else:
+                tmp = article_social_view[
+                    article_social_view[
                         "article_id"
-                    ].nunique()
+                    ].isin(filtered_article_ids)
+                ]
 
-                coverage_rows.append({
-                    "platform": platform.title(),
-                    "coverage_pct": (
-                        100 * linked
-                        / max(
-                            len(filtered_article_ids),
-                            1
-                        )
-                    ),
-                    "linked_articles": linked,
-                })
+                tmp = tmp[
+                    tmp["platform"].eq(platform)
+                ]
 
-            coverage_df = pd.DataFrame(
-                coverage_rows
+                linked = tmp[
+                    "article_id"
+                ].nunique()
+
+            coverage_rows.append({
+                "platform": platform.title(),
+                "coverage_pct": (
+                    100 * linked
+                    / max(
+                        len(filtered_article_ids),
+                        1
+                    )
+                ),
+                "linked_articles": linked,
+            })
+
+        coverage_df = pd.DataFrame(
+            coverage_rows
+        )
+
+        fig = px.bar(
+            coverage_df,
+            x="platform",
+            y="coverage_pct",
+            text="coverage_pct",
+            hover_data=[
+                "linked_articles"
+            ],
+            labels={
+                "platform": "Platform",
+                "coverage_pct": "Articles distributed (%)"
+            }
+        )
+
+        fig.update_traces(
+            texttemplate="%{text:.0f}%",
+            textposition="outside"
+        )
+        fig.update_yaxes(
+            range=[0, 100]
+        )
+        fig.update_layout(
+            showlegend=False
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True
+        )
+
+        st.divider()
+        st.markdown(
+            "#### Final social reach by platform"
+        )
+
+        if not perf_social.empty:
+            platform_perf = (
+                perf_social
+                .groupby("platform")
+                .agg(
+                    reach=("reach_count", "sum"),
+                    views=("views_count", "sum"),
+                    clicks=("clicks_count", "sum")
+                )
+                .reset_index()
             )
 
             fig = px.bar(
-                coverage_df,
+                platform_perf,
                 x="platform",
-                y="coverage_pct",
-                text="coverage_pct",
-                hover_data=[
-                    "linked_articles"
-                ],
+                y="reach",
                 labels={
                     "platform": "Platform",
-                    "coverage_pct": "Articles distributed (%)"
+                    "reach": "Reach"
                 }
-            )
-
-            fig.update_traces(
-                texttemplate="%{text:.0f}%",
-                textposition="outside"
-            )
-            fig.update_yaxes(
-                range=[0, 100]
             )
             fig.update_layout(
                 showlegend=False
             )
-
             st.plotly_chart(
                 fig,
                 use_container_width=True
             )
-
-        with right:
-            st.markdown(
-                "#### Final social reach by platform"
+        else:
+            st.info(
+                "No social metrics match the current filters."
             )
-
-            if not perf_social.empty:
-                platform_perf = (
-                    perf_social
-                    .groupby("platform")
-                    .agg(
-                        reach=("reach_count", "sum"),
-                        views=("views_count", "sum"),
-                        clicks=("clicks_count", "sum")
-                    )
-                    .reset_index()
-                )
-
-                fig = px.bar(
-                    platform_perf,
-                    x="platform",
-                    y="reach",
-                    labels={
-                        "platform": "Platform",
-                        "reach": "Reach"
-                    }
-                )
-                fig.update_layout(
-                    showlegend=False
-                )
-                st.plotly_chart(
-                    fig,
-                    use_container_width=True
-                )
-            else:
-                st.info(
-                    "No social metrics match the current filters."
-                )
 
         # -------------------------------------------------
         # Partner performance
@@ -4410,9 +4686,305 @@ with tabs[7]:
                 )
 
 
+
+# =========================================================
+# 9. NETWORK PATTERNS
+# =========================================================
+
+with tabs[8]:
+
+    st.subheader("Network patterns")
+    st.caption(
+        "Cross-partner patterns computed from confirmed citations, "
+        "shared stories and explicitly labelled editorial relations."
+    )
+
+    partner_names = sorted(filtered_articles["media"].dropna().unique())
+    id_to_media = article_meta.set_index("id")["media"].to_dict()
+    id_to_title = article_meta.set_index("id")["title"].to_dict()
+
+    st.markdown("#### Who references whom?")
+    if not citations.empty:
+        cp = citations.dropna(subset=["cited_article_id"]).copy()
+        cp["From"] = cp["citing_article_id"].map(id_to_media)
+        cp["To"] = cp["cited_article_id"].map(id_to_media)
+        cp = cp[cp["From"].isin(partner_names) & cp["To"].isin(partner_names)]
+        matrix = (
+            cp.groupby(["From", "To"]).size().unstack(fill_value=0)
+            .reindex(index=partner_names, columns=partner_names, fill_value=0)
+        )
+        st.dataframe(matrix, use_container_width=True)
+
+        flow = cp.groupby(["From", "To"]).size().reset_index(name="Citations")
+        if not flow.empty:
+            labels = sorted(set(flow["From"]) | set(flow["To"]))
+            idx = {x:i for i,x in enumerate(labels)}
+            fig = go.Figure(go.Sankey(
+                node=dict(label=labels),
+                link=dict(
+                    source=[idx[x] for x in flow["From"]],
+                    target=[idx[x] for x in flow["To"]],
+                    value=flow["Citations"].tolist(),
+                )
+            ))
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No citations available.")
+
+    st.markdown("#### Editorial relations between partners")
+    if not article_relations.empty:
+        rv = article_relations.copy()
+        rv["Source partner"] = rv["source_article_id"].map(id_to_media)
+        rv["Related partner"] = rv["related_article_id"].map(id_to_media)
+        rv["Source article"] = rv["source_article_id"].map(id_to_title)
+        rv["Related article"] = rv["related_article_id"].map(id_to_title)
+        rv = rv[
+            rv["Source partner"].isin(partner_names)
+            & rv["Related partner"].isin(partner_names)
+        ]
+        rel_summary = (
+            rv.groupby(["Source partner", "Related partner", "relation_type"])
+            .size().reset_index(name="Relations")
+            .sort_values("Relations", ascending=False)
+        )
+        st.dataframe(rel_summary, hide_index=True, use_container_width=True)
+
+        fig = px.bar(
+            rel_summary,
+            x="Source partner", y="Relations",
+            color="relation_type", barmode="group",
+            facet_col="Related partner",
+            labels={"relation_type":"Relation type"}
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("##### Relation evidence")
+        st.dataframe(
+            rv[[c for c in [
+                "Source partner", "Source article", "Related partner", "Related article",
+                "relation_type", "confidence", "similarity_score", "evidence"
+            ] if c in rv.columns]].sort_values("confidence", ascending=False),
+            hide_index=True, use_container_width=True,
+            column_config={
+                "confidence": st.column_config.NumberColumn("Relation confidence", format="%.2f"),
+                "similarity_score": st.column_config.NumberColumn("Semantic similarity", format="%.2f"),
+            }
+        )
+
+    st.markdown("#### Stories that spread across the network")
+    if not story_memberships.empty:
+        srows=[]
+        for cid,g in story_memberships[
+            story_memberships["article_id"].isin(filtered_article_ids)
+        ].groupby("cluster_id"):
+            ids=set(g["article_id"].dropna())
+            perf=associated_performance(ids)
+            srows.append({
+                "Story": g["cluster_title"].dropna().iloc[0] if g["cluster_title"].notna().any() else str(cid),
+                "Partners": g["media"].nunique(),
+                "Articles": len(ids),
+                "Website views": perf["website_views"],
+                "Social reach": perf["social_reach"],
+                "Cluster confidence": g["cluster_confidence"].dropna().iloc[0] if g["cluster_confidence"].notna().any() else None,
+            })
+        spread=pd.DataFrame(srows).sort_values(["Partners","Social reach"], ascending=False)
+        st.dataframe(spread, hide_index=True, use_container_width=True)
+
+    st.markdown("#### Shared people, countries, organisations and places")
+    if not entity_expanded.empty:
+        overlap_rows=[]
+        for (entity,etype),g in entity_expanded[
+            entity_expanded["article_id"].isin(filtered_article_ids)
+        ].groupby(["entity","entity_type"]):
+            ids=set(g["article_id"].dropna())
+            perf=associated_performance(ids)
+            overlap_rows.append({
+                "Entity": entity,
+                "Type": etype,
+                "Partners": g["media"].nunique(),
+                "Articles": len(ids),
+                "Website views": perf["website_views"],
+                "Associated social reach": perf["social_reach"],
+            })
+        overlap=pd.DataFrame(overlap_rows)
+        overlap=overlap[overlap["Partners"]>=2].sort_values(
+            ["Partners","Associated social reach"], ascending=False
+        )
+        st.dataframe(overlap.head(100), hide_index=True, use_container_width=True)
+
+        chart=overlap.sort_values("Associated social reach", ascending=False).head(15)
+        if not chart.empty:
+            fig=px.bar(
+                chart.sort_values("Associated social reach"),
+                x="Associated social reach", y="Entity", color="Type", orientation="h",
+                labels={"Associated social reach":"Associated social reach"}
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+
+# =========================================================
+# 10. PARTNER VALUE
+# =========================================================
+
+with tabs[9]:
+
+    st.subheader("What happens to our journalism after we publish it?")
+    st.caption(
+        "A partner view of distribution, references, pickups, follow-ups and audience impact."
+    )
+
+    available_partners = sorted(filtered_articles["media"].dropna().unique())
+    if not available_partners:
+        st.info("No partners match the current filters.")
+    else:
+        chosen_partner = st.selectbox(
+            "Partner", available_partners, key="partner_value_selector"
+        )
+        pa = filtered_articles[filtered_articles["media"].eq(chosen_partner)].copy()
+        pids=set(pa["id"])
+        pp=article_performance[article_performance["article_id"].isin(pids)].copy()
+        psocial=(
+            filtered_social_posts[filtered_social_posts["media"].eq(chosen_partner)].copy()
+            if (not filtered_social_posts.empty and "media" in filtered_social_posts.columns)
+            else pd.DataFrame()
+        )
+        linked_ids=(set(social_links[social_links["article_id"].isin(pids)]["article_id"]) if not social_links.empty else set())
+        cited_by_others=(
+            citations[citations["cited_article_id"].isin(pids) & ~citations["citing_article_id"].isin(pids)].copy()
+            if (not citations.empty and {"cited_article_id","citing_article_id"}.issubset(citations.columns))
+            else pd.DataFrame()
+        )
+        outgoing_rel=(
+            article_relations[article_relations["source_article_id"].isin(pids) & ~article_relations["related_article_id"].isin(pids)].copy()
+            if (not article_relations.empty and {"source_article_id","related_article_id"}.issubset(article_relations.columns))
+            else pd.DataFrame()
+        )
+        shared_clusters=(
+            story_memberships[story_memberships["article_id"].isin(pids)]["cluster_id"].unique().tolist()
+            if not story_memberships.empty else []
+        )
+        network_shared=0
+        for cid in shared_clusters:
+            g=story_memberships[story_memberships["cluster_id"].eq(cid)]
+            if g["media"].nunique() > 1:
+                network_shared += 1
+
+        v1,v2,v3,v4,v5,v6=st.columns(6)
+        v1.metric("Website articles", len(pa))
+        v2.metric("Distributed to social", len(linked_ids))
+        v3.metric("Social posts", len(psocial))
+        v4.metric("Website views", compact_number(sum_metric(pp,"website_views")))
+        v5.metric("Social reach", compact_number(sum_metric(pp,"social_reach")))
+        v6.metric("Shared stories", network_shared)
+
+        u1,u2,u3,u4=st.columns(4)
+        u1.metric("Cited by partners", len(cited_by_others))
+        u2.metric(
+            "Possible pickups",
+            int(outgoing_rel["relation_type"].eq("possible_pickup").sum()) if not outgoing_rel.empty else 0
+        )
+        u3.metric(
+            "Follow-ups",
+            int(outgoing_rel["relation_type"].eq("follow_up").sum()) if not outgoing_rel.empty else 0
+        )
+        u4.metric(
+            "Website → social coverage",
+            f"{100*len(linked_ids)/max(len(pa),1):.0f}%"
+        )
+
+        st.markdown("#### Where our stories are distributed")
+        coverage_rows=[]
+        for platform in ["telegram","facebook","instagram"]:
+            linked=(
+                article_social_view[
+                    article_social_view["article_id"].isin(pids)
+                    & article_social_view["platform"].eq(platform)
+                ]["article_id"].nunique()
+                if not article_social_view.empty else 0
+            )
+            coverage_rows.append({
+                "Platform": platform.title(),
+                "Articles distributed": linked,
+                "Coverage %": 100*linked/max(len(pa),1),
+            })
+        coverage=pd.DataFrame(coverage_rows)
+        fig=px.bar(
+            coverage, x="Platform", y="Coverage %", text="Coverage %",
+            labels={"Coverage %":"Website articles distributed (%)"}
+        )
+        fig.update_traces(texttemplate="%{text:.0f}%", textposition="outside")
+        fig.update_yaxes(range=[0,100])
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("#### Which of our publications live beyond our own platform?")
+        value=pp.copy()
+        if not value.empty:
+            value["Citations by partners"]=value["article_id"].map(
+                cited_by_others.groupby("cited_article_id").size().to_dict() if not cited_by_others.empty else {}
+            ).fillna(0).astype(int)
+            if not outgoing_rel.empty:
+                pickup_map=outgoing_rel[outgoing_rel["relation_type"].eq("possible_pickup")].groupby("source_article_id").size().to_dict()
+                follow_map=outgoing_rel[outgoing_rel["relation_type"].eq("follow_up")].groupby("source_article_id").size().to_dict()
+            else:
+                pickup_map={}; follow_map={}
+            value["Possible pickups"]=value["article_id"].map(pickup_map).fillna(0).astype(int)
+            value["Follow-ups"]=value["article_id"].map(follow_map).fillna(0).astype(int)
+            value["Network value score"]=(
+                value["Citations by partners"]*3
+                + value["Possible pickups"]*2
+                + value["Follow-ups"]*2
+                + (value["social_reach"]>0).astype(int)
+            )
+            value=value.sort_values(
+                ["Network value score","social_reach","website_views"], ascending=False
+            )
+            st.dataframe(
+                value[[c for c in [
+                    "published_at","title","website_views","social_reach","social_posts",
+                    "Citations by partners","Possible pickups","Follow-ups","Network value score","article_url"
+                ] if c in value.columns]].head(50),
+                hide_index=True, use_container_width=True,
+                column_config={
+                    "published_at": st.column_config.DatetimeColumn("Published",format="YYYY-MM-DD HH:mm"),
+                    "title":"Article",
+                    "article_url": st.column_config.LinkColumn("Open"),
+                }
+            )
+
+        st.markdown("#### Who references our reporting?")
+        if cited_by_others.empty:
+            st.info("No partner citations match the current filters.")
+        else:
+            cv=cited_by_others.copy()
+            st.dataframe(
+                cv[[c for c in [
+                    "citing_published_at","citing_media","citing_title","cited_title","evidence_text","confidence"
+                ] if c in cv.columns]],
+                hide_index=True, use_container_width=True
+            )
+
+        st.markdown("#### Which stories were picked up or followed up?")
+        if outgoing_rel.empty:
+            st.info("No editorial relations match the current filters.")
+        else:
+            id_to_media_local=article_meta.set_index("id")["media"].to_dict()
+            id_to_title_local=article_meta.set_index("id")["title"].to_dict()
+            rv=outgoing_rel.copy()
+            rv["Related partner"]=rv["related_article_id"].map(id_to_media_local)
+            rv["Source article"]=rv["source_article_id"].map(id_to_title_local)
+            rv["Related article"]=rv["related_article_id"].map(id_to_title_local)
+            st.dataframe(
+                rv[[c for c in [
+                    "relation_type","Source article","Related partner","Related article","confidence","evidence"
+                ] if c in rv.columns]].sort_values("confidence",ascending=False),
+                hide_index=True, use_container_width=True,
+                column_config={"confidence":st.column_config.NumberColumn("Relation confidence",format="%.2f")}
+            )
+
+
 st.caption(
     "Demo: Media Partners shared intelligence layer. "
     "All August 2026 content and performance figures in this environment "
-    "are synthetic. Same-story clusters, direct citations and possible "
-    "pickups remain separate evidence types."
+    "are synthetic. Confirmed citations, same-story clusters, possible pickups "
+    "and follow-ups are shown as separate evidence types."
 )
